@@ -15,8 +15,6 @@
 import { onBeforeUnmount, ref, onMounted, computed } from 'vue';
 import { KeepLiveWS } from 'bilibili-live-ws';
 import { propsType } from '@/utils/props';
-import { decodeDmV2 } from '@/utils/protobuf';
-
 import DanmakuList from '@/components/DanmakuList';
 
 export default {
@@ -49,6 +47,14 @@ export default {
       if (props.limit) danmakuList.value.addSpeedLimitDanmaku(danmaku);
       else danmakuList.value.addDanmaku(danmaku);
     };
+    function timestampToTime(timestamp){
+      timestamp = timestamp ? timestamp : null;
+      let date = new Date(timestamp);
+      let h = (date.getHours() < 10 ? '0' + date.getHours() : date.getHours()) + ':';
+      let m = (date.getMinutes() < 10 ? '0' + date.getMinutes() : date.getMinutes()) + ':';
+      let s = date.getSeconds() < 10 ? '0' + date.getSeconds() : date.getSeconds();
+      return h + m +s
+    }
 
     onMounted(() => {
       console.log('正在连接直播弹幕服务器', props.room);
@@ -87,7 +93,7 @@ export default {
       live.on('LIVE_OPEN_PLATFORM_SEND_GIFT', ({ data: { uid, uname, gift_name, gift_num, uface } }) => {
         handleSendGift({ uid, uname, giftName: gift_name, num: gift_num, face: uface });
       });
-      const handleSendGift = ({ uid, uname, giftName, num, face }) => {
+      const handleSendGift = ({ uid, uname, giftName, num,price, face, }) => {
         if (isBlockedUID(uid)) {
           console.log(`屏蔽了来自[${uname}]的礼物：${giftName}*${num}`);
           return;
@@ -108,6 +114,7 @@ export default {
               uname,
               giftName,
               num,
+              price,
               face,
             });
             setTimeout(() => {
@@ -123,6 +130,7 @@ export default {
             uname,
             giftName,
             num,
+            price,
             face,
           });
         }
@@ -130,25 +138,28 @@ export default {
 
       // 弹幕
       // live.on('DANMU_MSG', ({ info: [, message, [uid, uname, isOwner]], dm_v2 }) => {
-      live.on('DANMU_MSG', ({ info, dm_v2 }) => {
+      live.on('DANMU_MSG', ({ info }) => {
         const uid = info[2][0]//用户uid
         const uname = info[2][1]//用户名
         const admin = info[2][2]//房管 非房管为0 房管为1
         const message = info[1] //消息
         const privilege_type=info[7] //舰队类型，0非舰队，1总督，2提督，3舰长
         const face = info[0][15]['user']['base']['face'] //头像
-        const mode_info_extra = JSON.parse(info[0][15]['extra']) //是否@别人的信息
+        const mode_info_extra = JSON.parse(info[0][15]['extra']) //一点点关于弹幕的信息
+        const emoticon_options = info[0][13] ? info[0][13]['url']:''//表情 如果是发这种表情 都是单发的
+        const timestamp = timestampToTime(info[0][4]) //时间戳
+        // console.log(timestamp)
         if(mode_info_extra['reply_mid'] !== 0){ 
           //这个reply_mid 就是被@的人的uid
-          handleDanmaku({ uid, uname, message, admin, dmV2: dm_v2,privilege_type,reply_uname:mode_info_extra['reply_uname'],face });
+          handleDanmaku({ uid, uname, message,emoticon:emoticon_options, admin,privilege_type,reply_uname:mode_info_extra['reply_uname'],face,timestamp });
         }else{
-          handleDanmaku({ uid, uname, message, admin, dmV2: dm_v2,privilege_type,face });
+          handleDanmaku({ uid, uname, message,emoticon:emoticon_options, admin,privilege_type,face,timestamp });
         }
       });
       live.on('LIVE_OPEN_PLATFORM_DM', ({ data: { uid, uname, msg, uface } }) => {
         handleDanmaku({ uid, uname, message: msg, face: uface });
       });
-      const handleDanmaku = ({ uid, uname, message, isOwner, dmV2, privilege_type,reply_uname,face }) => {
+      const handleDanmaku = ({ uid, uname, message,emoticon, isOwner, privilege_type,reply_uname,face,timestamp }) => {
         if (isBlockedUID(uid)) {
           console.log(`屏蔽了来自[${uname}]的弹幕：${message}`);
           return;
@@ -159,22 +170,14 @@ export default {
           uid,
           uname,
           message,
+          emoticon,
           isAnchor: uid === props.anchor,
           isOwner: !!isOwner,
           privilege_type:privilege_type,
           reply_uname,
           face,
+          timestamp,
         };
-        if (dmV2) {
-          try {
-            const {
-              user: { face },
-            } = decodeDmV2(dmV2);
-            danmaku.face = face;
-          } catch (error) {
-            console.error('[decode dmV2 error]', error);
-          }
-        }
         if (props.delay > 0) setTimeout(() => addDanmaku(danmaku), props.delay * 1000);
         else addDanmaku(danmaku);
       };
